@@ -1,0 +1,60 @@
+name: React Build and Deploy
+
+on:
+  workflow_call:
+    inputs:
+      aws-default-region:
+        description: "AWS region"
+        required: true
+        type: string
+      tf-aws-role:
+        description: "TF role to assume"
+        required: true
+        type: string
+      domain-name:
+        description: "App domain name"
+        required: true
+        type: string
+      folder-name:
+        description: "App folder name"
+        required: true
+        type: string
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Use Node.js 16
+      uses: actions/setup-node@v3
+      with:
+        node-version: 16 
+
+    - name: Install Packages
+      run: |
+        cd ${{ inputs.folder-name}}
+        echo "REACT_APP_GOOGLE_API_KEY=${{ secrets.REACT_APP_GOOGLE_API_KEY }}" > .env
+        echo "REACT_APP_HH_HEADER=${{ secrets.REACT_APP_HH_HEADER }}" >> .env
+        npm install
+
+    - name: Build React App
+      run: |
+        cd ${{ inputs.folder-name}}
+        CI=false npm run build
+        echo "Build complete 🏗️"
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        role-to-assume: ${{ inputs.tf-aws-role }}
+        role-session-name: samplerolesession
+        aws-region: ${{ inputs.aws-default-region }}
+
+    - name: Sync S3 & Invalidate Caches
+      run: |
+        aws s3 sync ${{ inputs.folder-name}}/build/ s3://${{ secrets.AWS_S3_BUCKET }}
+        dist1=`aws cloudfront list-distributions --query "DistributionList.Items[?Comment=='${{ inputs.domain-name }}'].Id" --output text`
+        dist2=`aws cloudfront list-distributions --query "DistributionList.Items[?Comment=='www.${{ inputs.domain-name }}'].Id" --output text`
+        aws cloudfront create-invalidation --distribution-id $dist1 --paths "/*"
+        aws cloudfront create-invalidation --distribution-id $dist2 --paths "/*"
